@@ -1,20 +1,29 @@
-from flask import Flask, jsonify, request
+from flask import Flask, Response, request
 import requests
 import re
 import time
+import json
 
 app = Flask(__name__)
 
 BASE = "https://api.mail.tm"
 
-# ─── Regex patterns để bắt mã xác nhận ──────────────────────────────────────
-# Thêm / bớt tuỳ định dạng mã của site bạn cần
 CODE_PATTERNS = [
     r'\b[A-Z0-9]{3}-[A-Z0-9]{3}\b',   # ABC-123
     r'\b\d{6}\b',                        # 123456
     r'\b\d{4}\b',                        # 1234
     r'\b[A-Z0-9]{8}\b',                 # AB12CD34
 ]
+
+
+def download_json(data: dict, filename: str = "result.json"):
+    """Trả về response JSON kèm header tự động download file."""
+    return Response(
+        response=json.dumps(data, ensure_ascii=False, indent=2),
+        status=200,
+        mimetype="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 
 def get_token(email: str, password: str) -> str:
@@ -29,7 +38,7 @@ def get_token(email: str, password: str) -> str:
     return token
 
 
-def extract_code(text: str, patterns: list) -> str | None:
+def extract_code(text: str, patterns: list):
     for pat in patterns:
         m = re.search(pat, text)
         if m:
@@ -70,23 +79,25 @@ HTML = """<!DOCTYPE html>
     .lbl{font-size:.8rem;color:#6b7280;margin:8px 0 6px;display:block}
     .spin{display:inline-block;animation:spin 1s linear infinite}
     @keyframes spin{to{transform:rotate(360deg)}}
+    .dl-btn{display:none;width:100%;margin-top:10px;padding:10px;background:linear-gradient(135deg,#1e3a5f,#1e40af);color:#fff;border:none;border-radius:9px;font-size:.9rem;cursor:pointer;font-weight:600}
+    .dl-btn:hover{opacity:.85}
   </style>
 </head>
 <body>
 <div class="wrap">
   <h1>🔍 Get Code API</h1>
-  <p class="sub">Nhận <code>email + password</code> → chờ mail → trả về mã xác nhận</p>
+  <p class="sub">Nhận <code>email + password</code> → chờ mail → download <code>get-code-result.json</code></p>
 
   <div class="card">
     <h2>🔌 Endpoint</h2>
     <div class="ep">
       <span class="badge-get">GET</span>/api/get-code?email=...&amp;password=...<br/>
-      <span class="badge-post" style="margin-top:8px;display:inline-block">POST</span>/api/get-code &nbsp;→ body: <code>{"email","password","timeout","pattern"}</code>
+      <span class="badge-post" style="margin-top:8px;display:inline-block">POST</span>/api/get-code &nbsp;→ body JSON: <code>{"email","password","timeout","pattern"}</code>
     </div>
     <table>
       <tr><th>Tham số</th><th>Nơi truyền</th><th>Mặc định</th><th>Mô tả</th></tr>
-      <tr><td>email <span class="req">*bắt buộc</span></td><td>query / body</td><td>—</td><td>Địa chỉ email tạm</td></tr>
-      <tr><td>password <span class="req">*bắt buộc</span></td><td>query / body</td><td>—</td><td>Mật khẩu tài khoản</td></tr>
+      <tr><td>email <span class="req">*</span></td><td>query / body</td><td>—</td><td>Địa chỉ email tạm</td></tr>
+      <tr><td>password <span class="req">*</span></td><td>query / body</td><td>—</td><td>Mật khẩu tài khoản</td></tr>
       <tr><td>timeout</td><td>query / body</td><td>120</td><td>Thời gian chờ tối đa (giây)</td></tr>
       <tr><td>interval</td><td>query / body</td><td>5</td><td>Khoảng cách giữa mỗi lần check (giây)</td></tr>
       <tr><td>pattern</td><td>query / body</td><td>—</td><td>Regex tuỳ chỉnh để bắt mã</td></tr>
@@ -94,7 +105,7 @@ HTML = """<!DOCTYPE html>
   </div>
 
   <div class="card">
-    <h2>📤 Response</h2>
+    <h2>📤 Response — file <code>get-code-result.json</code></h2>
     <table>
       <tr><th>Field</th><th>Kiểu</th><th>Mô tả</th></tr>
       <tr><td>success</td><td>bool</td><td>true nếu tìm được mã</td></tr>
@@ -114,37 +125,35 @@ HTML = """<!DOCTYPE html>
       <input id="timeout" type="number" placeholder="timeout (s)" value="120"/>
       <input id="pattern" type="text" placeholder="regex (tuỳ chọn)"/>
     </div>
-    <button id="btn" onclick="run()">🔍 Chờ & Lấy Code</button>
+    <button id="btn" onclick="run()">🔍 Chờ & Download JSON</button>
     <span class="lbl" id="lbl"></span>
     <pre id="out">// Kết quả hiển thị ở đây...</pre>
+    <a id="dlLink" style="display:none"><button class="dl-btn" id="dlBtn">⬇️ Download get-code-result.json</button></a>
   </div>
 
   <div class="card">
     <h2>💡 Ví dụ gọi API</h2>
-    <pre># cURL (GET)
-curl "https://your-get-code-app.vercel.app/api/get-code?email=abc@mail.tm&password=Pass1234!&timeout=60"
+    <pre># cURL — tự download file
+curl -OJ "https://your-app.vercel.app/api/get-code?email=abc@mail.tm&password=Pass1234!&timeout=60"
 
-# cURL (POST)
-curl -X POST "https://your-get-code-app.vercel.app/api/get-code" \\
+# cURL POST
+curl -X POST "https://your-app.vercel.app/api/get-code" \\
   -H "Content-Type: application/json" \\
-  -d '{"email":"abc@mail.tm","password":"Pass1234!","timeout":60}'
+  -d '{"email":"abc@mail.tm","password":"Pass1234!","timeout":60}' \\
+  -OJ
 
 # Python
 import requests
-r = requests.post("https://your-get-code-app.vercel.app/api/get-code", json={
+r = requests.post("https://your-app.vercel.app/api/get-code", json={
     "email": "abc@mail.tm",
     "password": "Pass1234!",
     "timeout": 60
 })
-print(r.json()["code"])
-
-# JavaScript
-const res = await fetch("/api/get-code", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ email, password, timeout: 60 })
-});
-const data = await res.json();</pre>
+data = r.json()
+print(data["code"])
+# Hoặc lưu file
+with open("get-code-result.json", "wb") as f:
+    f.write(r.content)</pre>
   </div>
 </div>
 <script>
@@ -163,6 +172,7 @@ const data = await res.json();</pre>
     }
 
     btn.disabled = true;
+    document.getElementById('dlLink').style.display = 'none';
     const startTime = Date.now();
     const timer = setInterval(() => {
       const s = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -177,10 +187,19 @@ const data = await res.json();</pre>
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      const data = await res.json();
+      const blob = await res.blob();
+      const text = await blob.text();
+      const data = JSON.parse(text);
       clearInterval(timer);
-      lbl.textContent = data.success ? '✅ Tìm được mã sau ' + data.elapsed + 's' : '❌ Thất bại: ' + (data.error || '');
+      lbl.textContent = data.success ? '✅ Tìm được mã sau ' + data.elapsed + 's' : '❌ ' + (data.error || 'Thất bại');
       out.textContent = JSON.stringify(data, null, 2);
+
+      const url = URL.createObjectURL(blob);
+      const link = document.getElementById('dlLink');
+      link.href = url;
+      link.download = 'get-code-result.json';
+      link.style.display = 'block';
+      document.getElementById('dlBtn').style.display = 'block';
     } catch(e) {
       clearInterval(timer);
       lbl.textContent = '❌ Lỗi kết nối';
@@ -201,14 +220,14 @@ def index():
 @app.route('/api/get-code', methods=['GET', 'POST'])
 def get_code():
     """
-    Nhận email + password → đăng nhập → poll inbox → trích mã → trả JSON.
+    Nhận email + password → đăng nhập → poll inbox → trích mã → download JSON.
 
-    Params (query string cho GET, JSON body cho POST):
-      email    * : string — địa chỉ email
-      password * : string — mật khẩu
-      timeout    : int    — giây chờ tối đa, mặc định 120
-      interval   : int    — giây giữa mỗi lần poll, mặc định 5
-      pattern    : string — regex tuỳ chỉnh (ghi đè CODE_PATTERNS)
+    Params:
+      email    * : string
+      password * : string
+      timeout    : int, mặc định 120 (giây)
+      interval   : int, mặc định 5 (giây)
+      pattern    : string regex tuỳ chỉnh
     """
     t0 = time.time()
 
@@ -226,12 +245,11 @@ def get_code():
         interval       = int(request.args.get('interval', 5))
         custom_pattern = request.args.get('pattern', None)
 
-    # Validate
     if not email or not password:
-        return jsonify({
+        return download_json({
             "success": False,
             "error":   "Thiếu tham số bắt buộc: email và password"
-        }), 400
+        }, "get-code-error.json")
 
     timeout  = max(10, min(timeout, 300))
     interval = max(2,  min(interval, 30))
@@ -276,28 +294,28 @@ def get_code():
         elapsed = round(time.time() - t0, 2)
 
         if code:
-            return jsonify({
+            return download_json({
                 "success": True,
                 "code":    code,
                 "from":    sender,
                 "subject": subject,
                 "elapsed": elapsed
-            })
+            }, "get-code-result.json")
         else:
-            return jsonify({
+            return download_json({
                 "success": False,
                 "code":    None,
                 "error":   f"Không tìm thấy mã sau {timeout}s",
                 "elapsed": elapsed
-            }), 408
+            }, "get-code-error.json")
 
     except Exception as e:
-        return jsonify({
+        return download_json({
             "success": False,
             "code":    None,
             "error":   str(e),
             "elapsed": round(time.time() - t0, 2)
-        }), 500
+        }, "get-code-error.json")
 
 
 if __name__ == '__main__':
