@@ -1,13 +1,36 @@
 from flask import Flask, jsonify
+import requests
+import random
+import string
 
 app = Flask(__name__)
 
-
-@app.route("/")
-def home():
-    return "Flask Vercel Example - Hello World", 200
+base = "https://api.mail.tm"
 
 
-@app.errorhandler(404)
-def page_not_found(e):
-    return jsonify({"status": 404, "message": "Not Found"}), 404
+@app.route("/api", methods=["GET"])
+def create_mail():
+
+    domain = requests.get(base + "/domains").json()["hydra:member"][0]["domain"]
+
+    username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+
+    email = f"{username}@{domain}"
+
+    password = "123456"
+
+    requests.post(
+        base + "/accounts",
+        json={
+            "address": email,
+            "password": password
+        }
+    )
+
+    return jsonify({
+        "email": email,
+        "password": password
+    })
+
+
+app = app
