@@ -2,7 +2,6 @@ from flask import Flask, Response, request
 import requests
 import re
 import time
-import json
 
 app = Flask(__name__)
 
@@ -16,12 +15,12 @@ CODE_PATTERNS = [
 ]
 
 
-def download_json(data: dict, filename: str = "result.json"):
-    """Trả về response JSON kèm header tự động download file."""
+def download_txt(content: str, filename: str = "result.txt"):
+    """Trả về file .txt với header tự động download."""
     return Response(
-        response=json.dumps(data, ensure_ascii=False, indent=2),
+        response=content,
         status=200,
-        mimetype="application/json",
+        mimetype="text/plain",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
@@ -75,7 +74,7 @@ HTML = """<!DOCTYPE html>
     button{width:100%;padding:13px;background:linear-gradient(135deg,#059669,#0d9488);color:#fff;border:none;border-radius:9px;font-size:.95rem;cursor:pointer;font-weight:600;transition:opacity .2s}
     button:hover{opacity:.85}
     button:disabled{opacity:.45;cursor:not-allowed}
-    pre{background:#0f0f1a;border:1px solid #2d2d5e;border-radius:8px;padding:14px;font-size:.83rem;color:#d1d5db;white-space:pre-wrap;word-break:break-all;min-height:54px;margin-top:12px}
+    pre{background:#0f0f1a;border:1px solid #2d2d5e;border-radius:8px;padding:14px;font-size:.83rem;color:#d1d5db;white-space:pre-wrap;min-height:54px;margin-top:12px}
     .lbl{font-size:.8rem;color:#6b7280;margin:8px 0 6px;display:block}
     .spin{display:inline-block;animation:spin 1s linear infinite}
     @keyframes spin{to{transform:rotate(360deg)}}
@@ -86,7 +85,7 @@ HTML = """<!DOCTYPE html>
 <body>
 <div class="wrap">
   <h1>🔍 Get Code API</h1>
-  <p class="sub">Nhận <code>email + password</code> → chờ mail → download <code>get-code-result.json</code></p>
+  <p class="sub">Nhận <code>email + password</code> → chờ mail → download <code>get-code.txt</code> chứa mã xác nhận</p>
 
   <div class="card">
     <h2>🔌 Endpoint</h2>
@@ -105,15 +104,11 @@ HTML = """<!DOCTYPE html>
   </div>
 
   <div class="card">
-    <h2>📤 Response — file <code>get-code-result.json</code></h2>
+    <h2>📤 Nội dung file <code>get-code.txt</code></h2>
     <table>
-      <tr><th>Field</th><th>Kiểu</th><th>Mô tả</th></tr>
-      <tr><td>success</td><td>bool</td><td>true nếu tìm được mã</td></tr>
-      <tr><td>code</td><td>string</td><td>Mã xác nhận trích xuất được</td></tr>
-      <tr><td>from</td><td>string</td><td>Địa chỉ người gửi</td></tr>
-      <tr><td>subject</td><td>string</td><td>Tiêu đề email</td></tr>
-      <tr><td>elapsed</td><td>float</td><td>Thời gian xử lý (giây)</td></tr>
-      <tr><td>error</td><td>string</td><td>Thông báo lỗi (nếu có)</td></tr>
+      <tr><th>Trường hợp</th><th>Nội dung</th></tr>
+      <tr><td>Thành công</td><td><code>482931</code></td></tr>
+      <tr><td>Thất bại</td><td><code>error|Không tìm thấy mã sau 120s</code></td></tr>
     </table>
   </div>
 
@@ -125,16 +120,18 @@ HTML = """<!DOCTYPE html>
       <input id="timeout" type="number" placeholder="timeout (s)" value="120"/>
       <input id="pattern" type="text" placeholder="regex (tuỳ chọn)"/>
     </div>
-    <button id="btn" onclick="run()">🔍 Chờ & Download JSON</button>
+    <button id="btn" onclick="run()">🔍 Chờ & Download TXT</button>
     <span class="lbl" id="lbl"></span>
-    <pre id="out">// Kết quả hiển thị ở đây...</pre>
-    <a id="dlLink" style="display:none"><button class="dl-btn" id="dlBtn">⬇️ Download get-code-result.json</button></a>
+    <pre id="out">// Nội dung file sẽ hiển thị ở đây...</pre>
+    <a id="dlLink" style="display:none"><button class="dl-btn" id="dlBtn">⬇️ Download get-code.txt</button></a>
   </div>
 
   <div class="card">
     <h2>💡 Ví dụ gọi API</h2>
-    <pre># cURL — tự download file
+    <pre># cURL GET — tự download file
 curl -OJ "https://your-app.vercel.app/api/get-code?email=abc@mail.tm&password=Pass1234!&timeout=60"
+# → lưu file: get-code.txt
+# → nội dung: 482931
 
 # cURL POST
 curl -X POST "https://your-app.vercel.app/api/get-code" \\
@@ -149,11 +146,8 @@ r = requests.post("https://your-app.vercel.app/api/get-code", json={
     "password": "Pass1234!",
     "timeout": 60
 })
-data = r.json()
-print(data["code"])
-# Hoặc lưu file
-with open("get-code-result.json", "wb") as f:
-    f.write(r.content)</pre>
+code = r.text.strip()
+print(code)  # 482931</pre>
   </div>
 </div>
 <script>
@@ -188,16 +182,17 @@ with open("get-code-result.json", "wb") as f:
         body: JSON.stringify(body)
       });
       const blob = await res.blob();
-      const text = await blob.text();
-      const data = JSON.parse(text);
+      const text = (await blob.text()).trim();
       clearInterval(timer);
-      lbl.textContent = data.success ? '✅ Tìm được mã sau ' + data.elapsed + 's' : '❌ ' + (data.error || 'Thất bại');
-      out.textContent = JSON.stringify(data, null, 2);
+
+      const ok = !text.startsWith('error|');
+      lbl.textContent = ok ? '✅ Tìm được mã!' : '❌ ' + text.replace('error|', '');
+      out.textContent = text;
 
       const url = URL.createObjectURL(blob);
       const link = document.getElementById('dlLink');
       link.href = url;
-      link.download = 'get-code-result.json';
+      link.download = 'get-code.txt';
       link.style.display = 'block';
       document.getElementById('dlBtn').style.display = 'block';
     } catch(e) {
@@ -220,7 +215,11 @@ def index():
 @app.route('/api/get-code', methods=['GET', 'POST'])
 def get_code():
     """
-    Nhận email + password → đăng nhập → poll inbox → trích mã → download JSON.
+    Nhận email + password → đăng nhập → poll inbox → trích mã → download TXT.
+
+    Response: file get-code.txt (Content-Disposition: attachment)
+      Thành công : <code>            ví dụ: 482931
+      Thất bại   : error|<message>  ví dụ: error|Không tìm thấy mã sau 120s
 
     Params:
       email    * : string
@@ -246,10 +245,7 @@ def get_code():
         custom_pattern = request.args.get('pattern', None)
 
     if not email or not password:
-        return download_json({
-            "success": False,
-            "error":   "Thiếu tham số bắt buộc: email và password"
-        }, "get-code-error.json")
+        return download_txt("error|Thiếu tham số bắt buộc: email và password", "get-code.txt")
 
     timeout  = max(10, min(timeout, 300))
     interval = max(2,  min(interval, 30))
@@ -262,7 +258,7 @@ def get_code():
         # 2. Poll inbox và trích mã
         headers  = {"Authorization": f"Bearer {token}"}
         deadline = time.time() + timeout
-        code = subject = sender = None
+        code     = None
 
         while time.time() < deadline:
             msg_res = requests.get(f"{BASE}/messages", headers=headers, timeout=10)
@@ -282,8 +278,6 @@ def get_code():
 
                 code = extract_code(combined, patterns)
                 if code:
-                    subject = mail.get("subject", "")
-                    sender  = mail.get("from", {}).get("address", "")
                     break
 
             if code:
@@ -291,31 +285,16 @@ def get_code():
 
             time.sleep(interval)
 
-        elapsed = round(time.time() - t0, 2)
-
         if code:
-            return download_json({
-                "success": True,
-                "code":    code,
-                "from":    sender,
-                "subject": subject,
-                "elapsed": elapsed
-            }, "get-code-result.json")
+            return download_txt(code, "get-code.txt")
         else:
-            return download_json({
-                "success": False,
-                "code":    None,
-                "error":   f"Không tìm thấy mã sau {timeout}s",
-                "elapsed": elapsed
-            }, "get-code-error.json")
+            return download_txt(
+                f"error|Không tìm thấy mã sau {timeout}s",
+                "get-code.txt"
+            )
 
     except Exception as e:
-        return download_json({
-            "success": False,
-            "code":    None,
-            "error":   str(e),
-            "elapsed": round(time.time() - t0, 2)
-        }, "get-code-error.json")
+        return download_txt(f"error|{str(e)}", "get-code.txt")
 
 
 if __name__ == '__main__':
