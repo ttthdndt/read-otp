@@ -129,19 +129,19 @@ HTML = """<!DOCTYPE html>
   <div class="card">
     <h2>💡 Ví dụ gọi API</h2>
     <pre># cURL GET — tự download file
-curl -OJ "https://your-app.vercel.app/api/get-code?email=abc@mail.tm&password=Pass1234!&timeout=60"
+curl -OJ "https://read-otp.vercel.app/api/get-code?email=abc@mail.tm&password=Pass1234!&timeout=60"
 # → lưu file: get-code.txt
 # → nội dung: 482931
 
 # cURL POST
-curl -X POST "https://your-app.vercel.app/api/get-code" \\
+curl -X POST "https://read-otp.vercel.app/api/get-code" \\
   -H "Content-Type: application/json" \\
   -d '{"email":"abc@mail.tm","password":"Pass1234!","timeout":60}' \\
   -OJ
 
 # Python
 import requests
-r = requests.post("https://your-app.vercel.app/api/get-code", json={
+r = requests.post("https://read-otp.vercel.app/api/get-code", json={
     "email": "abc@mail.tm",
     "password": "Pass1234!",
     "timeout": 60
