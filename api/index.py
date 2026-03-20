@@ -2,32 +2,55 @@ from flask import Flask, Response, request
 import requests
 import re
 import time
+from html.parser import HTMLParser
 
 app = Flask(__name__)
 
 BASE = "https://api.mail.tm"
 
+# ── Pattern mặc định ──────────────────────────────────────────────────────────
 CODE_PATTERNS = [
-    r'\b[A-Z0-9]{3}-[A-Z0-9]{3}\b',   # ABC-123
-    r'\b\d{6}\b',                        # 123456
-    r'\b\d{4}\b',                        # 1234
-    r'\b[A-Z0-9]{8}\b',                 # AB12CD34
+    r'\b[A-Z0-9]{3,8}-[A-Z0-9]{3,8}\b',   # XXX-XXX  (ưu tiên — theo yêu cầu)
+    r'\b[A-Z0-9]{3}-[A-Z0-9]{3}\b',         # ABC-123  (3-3)
+    r'\b\d{6}\b',                            # 123456
+    r'\b\d{4}\b',                            # 1234
+    r'\b[A-Z0-9]{8}\b',                      # AB12CD34
 ]
 
 
+# ── Strip HTML đơn giản ───────────────────────────────────────────────────────
+class _MLStripper(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.reset()
+        self.fed = []
+
+    def handle_data(self, d):
+        self.fed.append(d)
+
+    def get_data(self):
+        return " ".join(self.fed)
+
+
+def strip_html(html: str) -> str:
+    s = _MLStripper()
+    s.feed(html)
+    return re.sub(r"\s{2,}", " ", s.get_data()).strip()
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def download_txt(content: str, filename: str = "result.txt"):
-    """Trả về file .txt với header tự động download."""
     return Response(
         response=content,
         status=200,
-        mimetype="text/plain",
+        mimetype="text/plain; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
 
 def get_token(email: str, password: str) -> str:
     res = requests.post(f"{BASE}/token", json={
-        "address":  email,
+        "address": email,
         "password": password
     }, timeout=10)
     res.raise_for_status()
@@ -38,13 +61,60 @@ def get_token(email: str, password: str) -> str:
 
 
 def extract_code(text: str, patterns: list):
+    """Trả về code đầu tiên khớp, ưu tiên theo thứ tự patterns."""
     for pat in patterns:
-        m = re.search(pat, text)
+        m = re.search(pat, text, re.IGNORECASE)
         if m:
-            return m.group(0)
+            return m.group(0).upper()
     return None
 
 
+def format_mail_result(mail: dict, patterns: list) -> str:
+    """
+    Trả về chuỗi đầy đủ:
+      - Metadata: from, subject, date
+      - Nội dung mail
+      - Code nếu tìm được, ngược lại: 'không đọc được code'
+    """
+    divider  = "=" * 60
+    thin     = "-" * 60
+
+    # Metadata
+    from_    = mail.get("from", {}).get("address", "(không rõ)")
+    subject  = mail.get("subject", "(không có tiêu đề)")
+    date_raw = mail.get("createdAt", "")
+
+    # Body: ưu tiên text, fallback HTML
+    body_text = mail.get("text", "").strip()
+    html_parts = mail.get("html", []) or []
+    html_text  = strip_html(" ".join(html_parts)).strip() if html_parts else ""
+    body       = body_text if body_text else html_text or "(email không có nội dung)"
+
+    # Tìm code
+    combined = body_text + " " + html_text
+    code     = extract_code(combined, patterns)
+
+    lines = [
+        divider,
+        f"📅 Ngày   : {date_raw}",
+        f"👤 Từ     : {from_}",
+        f"📌 Tiêu đề: {subject}",
+        thin,
+        "📄 Nội dung:",
+        body,
+        thin,
+    ]
+
+    if code:
+        lines.append(f"🔑 Code   : {code}")
+    else:
+        lines.append("⚠️  Không đọc được code (không tìm thấy định dạng XXX-XXX)")
+
+    lines.append(divider)
+    return "\n".join(lines)
+
+
+# ── HTML giao diện (giữ nguyên style, chỉ cập nhật mô tả) ────────────────────
 HTML = """<!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -54,7 +124,7 @@ HTML = """<!DOCTYPE html>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     body{font-family:'Segoe UI',sans-serif;background:#0f0f1a;color:#e0e0f0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
-    .wrap{width:100%;max-width:640px}
+    .wrap{width:100%;max-width:680px}
     h1{font-size:1.7rem;color:#34d399;text-align:center;margin-bottom:6px}
     .sub{text-align:center;color:#6b7280;margin-bottom:32px;font-size:.93rem}
     .card{background:#1a1a2e;border:1px solid #2d2d5e;border-radius:14px;padding:26px;margin-bottom:18px}
@@ -85,7 +155,7 @@ HTML = """<!DOCTYPE html>
 <body>
 <div class="wrap">
   <h1>🔍 Get Code API</h1>
-  <p class="sub">Nhận <code>email + password</code> → chờ mail → download <code>get-code.txt</code> chứa mã xác nhận</p>
+  <p class="sub">Nhận <code>email + password</code> → chờ mail → download <code>get-code.txt</code> chứa nội dung mail + mã xác nhận</p>
 
   <div class="card">
     <h2>🔌 Endpoint</h2>
@@ -107,8 +177,9 @@ HTML = """<!DOCTYPE html>
     <h2>📤 Nội dung file <code>get-code.txt</code></h2>
     <table>
       <tr><th>Trường hợp</th><th>Nội dung</th></tr>
-      <tr><td>Thành công</td><td><code>482931</code></td></tr>
-      <tr><td>Thất bại</td><td><code>error|Không tìm thấy mã sau 120s</code></td></tr>
+      <tr><td>Tìm được code</td><td>Nội dung mail đầy đủ + <code>🔑 Code: ABC-123</code></td></tr>
+      <tr><td>Không có code</td><td>Nội dung mail đầy đủ + <code>⚠️ Không đọc được code</code></td></tr>
+      <tr><td>Timeout / lỗi</td><td><code>error|Không tìm thấy mail sau 120s</code></td></tr>
     </table>
   </div>
 
@@ -130,8 +201,6 @@ HTML = """<!DOCTYPE html>
     <h2>💡 Ví dụ gọi API</h2>
     <pre># cURL GET — tự download file
 curl -OJ "https://read-otp.vercel.app/api/get-code?email=abc@mail.tm&password=Pass1234!&timeout=60"
-# → lưu file: get-code.txt
-# → nội dung: 482931
 
 # cURL POST
 curl -X POST "https://read-otp.vercel.app/api/get-code" \\
@@ -146,8 +215,17 @@ r = requests.post("https://read-otp.vercel.app/api/get-code", json={
     "password": "Pass1234!",
     "timeout": 60
 })
-code = r.text.strip()
-print(code)  # 482931</pre>
+print(r.text)
+# ============================================================
+# 📅 Ngày   : 2025-01-01T12:00:00+00:00
+# 👤 Từ     : noreply@example.com
+# 📌 Tiêu đề: Your verification code
+# ------------------------------------------------------------
+# 📄 Nội dung:
+# Your code is ABC-123. It expires in 10 minutes.
+# ------------------------------------------------------------
+# 🔑 Code   : ABC-123
+# ============================================================</pre>
   </div>
 </div>
 <script>
@@ -160,10 +238,7 @@ print(code)  # 482931</pre>
     const timeout  = document.getElementById('timeout').value || 120;
     const pattern  = document.getElementById('pattern').value.trim();
 
-    if (!email || !password) {
-      lbl.textContent = '⚠️ Vui lòng nhập email và password';
-      return;
-    }
+    if (!email || !password) { lbl.textContent = '⚠️ Vui lòng nhập email và password'; return; }
 
     btn.disabled = true;
     document.getElementById('dlLink').style.display = 'none';
@@ -185,16 +260,18 @@ print(code)  # 482931</pre>
       const text = (await blob.text()).trim();
       clearInterval(timer);
 
-      const ok = !text.startsWith('error|');
-      lbl.textContent = ok ? '✅ Tìm được mã!' : '❌ ' + text.replace('error|', '');
+      const isError = text.startsWith('error|');
+      lbl.textContent = isError
+        ? '❌ ' + text.replace('error|', '')
+        : text.includes('🔑') ? '✅ Tìm được code!' : '⚠️ Nhận mail nhưng không có code XXX-XXX';
       out.textContent = text;
 
-      const url = URL.createObjectURL(blob);
-      const link = document.getElementById('dlLink');
-      link.href = url;
-      link.download = 'get-code.txt';
-      link.style.display = 'block';
-      document.getElementById('dlBtn').style.display = 'block';
+      if (!isError) {
+        const url = URL.createObjectURL(blob);
+        const link = document.getElementById('dlLink');
+        link.href = url; link.download = 'get-code.txt'; link.style.display = 'block';
+        document.getElementById('dlBtn').style.display = 'block';
+      }
     } catch(e) {
       clearInterval(timer);
       lbl.textContent = '❌ Lỗi kết nối';
@@ -207,6 +284,7 @@ print(code)  # 482931</pre>
 </html>"""
 
 
+# ── Routes ────────────────────────────────────────────────────────────────────
 @app.route('/')
 def index():
     return HTML
@@ -215,21 +293,13 @@ def index():
 @app.route('/api/get-code', methods=['GET', 'POST'])
 def get_code():
     """
-    Nhận email + password → đăng nhập → poll inbox → trích mã → download TXT.
+    Poll inbox → trả về nội dung mail + code (nếu có) dưới dạng file TXT.
 
-    Response: file get-code.txt (Content-Disposition: attachment)
-      Thành công : <code>            ví dụ: 482931
-      Thất bại   : error|<message>  ví dụ: error|Không tìm thấy mã sau 120s
-
-    Params:
-      email    * : string
-      password * : string
-      timeout    : int, mặc định 120 (giây)
-      interval   : int, mặc định 5 (giây)
-      pattern    : string regex tuỳ chỉnh
+    Response: file get-code.txt
+      Thành công  : nội dung mail đầy đủ + "🔑 Code: XXX-XXX"
+      Không code  : nội dung mail đầy đủ + "⚠️ Không đọc được code"
+      Timeout/lỗi : "error|<message>"
     """
-    t0 = time.time()
-
     if request.method == 'POST':
         body           = request.get_json(silent=True) or {}
         email          = body.get('email', '').strip()
@@ -245,51 +315,50 @@ def get_code():
         custom_pattern = request.args.get('pattern', None)
 
     if not email or not password:
-        return download_txt("error|Thiếu tham số bắt buộc: email và password", "get-code.txt")
+        return download_txt("error|Thiếu tham số bắt buộc: email và password")
 
     timeout  = max(10, min(timeout, 300))
     interval = max(2,  min(interval, 30))
     patterns = [custom_pattern] if custom_pattern else CODE_PATTERNS
 
     try:
-        # 1. Lấy JWT token
-        token = get_token(email, password)
-
-        # 2. Poll inbox và trích mã
-        headers  = {"Authorization": f"Bearer {token}"}
+        token   = get_token(email, password)
+        headers = {"Authorization": f"Bearer {token}"}
+        seen    = set()          # tránh xử lý lại mail cũ
+        results = []             # tập hợp kết quả từng mail mới
         deadline = time.time() + timeout
-        code     = None
 
         while time.time() < deadline:
             msg_res = requests.get(f"{BASE}/messages", headers=headers, timeout=10)
             msg_res.raise_for_status()
             members = msg_res.json().get("hydra:member", [])
 
+            new_found = False
             for msg in members:
-                detail = requests.get(
-                    f"{BASE}/messages/{msg['id']}", headers=headers, timeout=10
-                )
+                mid = msg["id"]
+                if mid in seen:
+                    continue
+                seen.add(mid)
+                new_found = True
+
+                detail = requests.get(f"{BASE}/messages/{mid}", headers=headers, timeout=10)
                 detail.raise_for_status()
                 mail = detail.json()
 
-                text     = mail.get("text", "") or ""
-                html_raw = " ".join(mail.get("html", []) or [])
-                combined = text + " " + html_raw
+                results.append(format_mail_result(mail, patterns))
 
-                code = extract_code(combined, patterns)
-                if code:
-                    break
-
-            if code:
+            # Ngay khi có mail mới → trả về luôn, không chờ timeout
+            if new_found and results:
                 break
 
             time.sleep(interval)
 
-        if code:
-            return download_txt(code, "get-code.txt")
+        if results:
+            content = "\n\n".join(results)
+            return download_txt(content, "get-code.txt")
         else:
             return download_txt(
-                f"error|Không tìm thấy mã sau {timeout}s",
+                f"error|Không tìm thấy mail nào sau {timeout}s",
                 "get-code.txt"
             )
 
